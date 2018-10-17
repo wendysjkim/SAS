@@ -1,0 +1,71 @@
+# Collapse monthly data to one per loan
+# Compiles delinquency history in to a string and fills in X’s in months of missing data
+
+data dq_history_OTS_0;
+      retain DelinquencyStatusCodeOTS CurrentDistributionDate2 CurrentDistributionDate trust_loanid;
+set mbsdata_remittance;
+      CurrentDistributionDate2 = mdy(substr(CurrentDistributionDate,5,2),substr(CurrentDistributionDate,7,2),substr(CurrentDistributionDate,1,4));
+      format CurrentDistributionDate2 mmddyy10.;
+      trust_loanid = catx('_',SeriesID,Loannumber,PoolNumber);
+      trust_loanid_Date = catx('_',SeriesID,Loannumber,PoolNumber,CurrentDistributionDate);
+      keep DelinquencyStatusCodeOTS CurrentDistributionDate2 CurrentDistributionDate trust_loanid trust_loanid_Date SeriesID PoolNumber LoanNumber;
+run;
+
+proc sort data = dq_history_OTS_0 nodupkey; by trust_loanid CurrentDistributionDate2 DelinquencyStatusCodeOTS; run;
+
+# filling in missing months;
+data dq_history_OTS_1;
+      retain id CurrentDistributionDate2 lag_date month_dif months_to_add DelinquencyStatusCodeOTSfinal;
+      format firstperiod lastperiod lag_date mmddyy10.;
+      length DelinquencyStatusCodeOTSfinal $200;
+
+set dq_history_OTS_0;
+      by trust_loanid CurrentDistributionDate2;
+      retain firstperiod;
+      if first.trust_loanid then id=id+1; *assign id at loan level;
+      id+0;
+      if first.trust_loanid then firstperiod = CurrentDistributionDate2;
+      if last.trust_loanid then lastperiod = CurrentDistributionDate2;
+      recentdate = 0; if last.trust_loanid then recentdate = 1;
+      months= .;
+      if recentdate = 1 then months = intck('month',firstperiod,lastperiod,'continuous')+1; *calculate # of months between first & last months of available data at loan level;
+      if DelinquencyStatusCodeOTS eq "" then DelinquencyStatusCodeOTS = "X";
+      DelinquencyStatusCodeOTSfinal = DelinquencyStatusCodeOTS; *updated delinquency status code with missing months filled in;
+      lag_date = lag(CurrentDistributionDate2);
+      if first.trust_loanid then lag_date = CurrentDistributionDate2; 
+      month_dif = intck('month',lag_date,CurrentDistributionDate2,'D');
+      if first.trust_loanid then month_dif = 1;
+      months_to_add = month_dif - length(DelinquencyStatusCodeOTSfinal);
+      if months_to_add > 0 then do;
+            DelinquencyStatusCodeOTSfinal = cats(repeat('X',months_to_add-1),DelinquencyStatusCodeOTS);
+      end;
+run;
+
+%macro dq_history(in= );
+data dq_history_OTS_full;
+      length del_history $300.;
+      format missingcheck mmddyy10.;
+      do until (last.trust_loanid);
+set dq_history_OTS_&in.;
+      by trust_loanid notsorted;
+      missingcheck = intck('month',firstperiod,'same');
+      del_history = cats(del_history,DelinquencyStatusCodeOTSFinal);
+      end;
+      del_length = length(del_history);
+      missingmonths = months - del_length;
+run;
+
+data dq_history_OTS_full_missing;
+retain missingmonths months del_length ;
+set dq_history_OTS_full;
+where missingmonths ne 0;
+run;
+
+data dq_history_OTS_full_done;
+retain missingmonths months del_length ;
+set dq_history_OTS_full;
+where missingmonths eq 0;
+run;
+
+%mend;
+%dq_history(in=1);
